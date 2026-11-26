@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#102d30"><title>雪镇夺礼 · 圣诞阵营争夺战</title><link rel="icon" href="data:,"><link rel="stylesheet" href="snowpost.css"></head>
+<body>
+<main>
+<header><div class="brand"><span class="stamp" aria-hidden="true">✳</span><div><p class="eyebrow">NORTH POLE POST</p><h1>雪镇夺礼</h1></div></div><div class="tools"><span id="mode">单人陪练</span><button id="looksettings" aria-haspopup="dialog">视角设置</button><button class="invite" id="invite">邀请好友 <b>↗</b></button></div></header>
+<section class="field" aria-label="圣诞争夺战三维游戏场景">
+<canvas id="canvas" tabindex="0" aria-label="3D 对战街区，WASD 移动，鼠标控制视角，鼠标左键疾跑，左 Shift 冲刺，鼠标右键坚守，空格冲击波，按住 Q 回望"></canvas>
+<div class="score" aria-label="当前比分"><span class="team red"><i></i>莓红队</span><strong id="red">0</strong><em>／</em><strong id="blue">0</strong><span class="team blue">冰蓝队<i></i></span></div>
+<div id="rearflag" hidden>正在回望</div><div id="stunned" role="status" hidden></div><div id="notice" aria-live="polite"></div>
+<div class="mission"><span class="pip"></span><span id="goal">前往广场，夺取礼物</span></div>
+<div id="loader"><div class="loadmark">✳</div><h2 id="loading-title">正在进入雪镇</h2><div class="track"><i id="progress"></i></div><p id="load-detail">装载三维街区与角色</p></div>
+<div class="mobilepad" aria-label="移动方向"><button data-dir="1" aria-label="向前">▲</button><button data-dir="4" aria-label="向左">◀</button><button data-dir="2" aria-label="向后">▼</button><button data-dir="8" aria-label="向右">▶</button></div>
+</section>
+<footer><div class="movement"><span class="mini">移动</span><div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div></div><div class="skills">
+<button class="skill" data-skill="0"><kbd>左 Shift</kbd><span><b>冲刺</b><small>撞落礼物</small></span></button>
+<button class="skill" data-skill="1"><kbd>右键</kbd><span><b>坚守</b><small>抵挡冲刺</small></span></button>
+<button class="skill" data-skill="2"><kbd>空格</kbd><span><b>冲击波</b><small>破盾致晕</small></span></button>
+<button class="skill" data-skill="3"><kbd>左键</kbd><span><b>疾跑</b><small>加速移动</small></span></button></div><button id="glance" aria-pressed="false" title="按住 Q 或此按钮回望"><kbd>Q</kbd> 回望</button><span class="orbithelp">点击画面控制视角 · Esc 释放</span><button id="audio" title="切换音效" aria-pressed="true">音效 开</button></footer>
+</main>
+<dialog id="lookpanel" aria-labelledby="looktitle"><form method="dialog" class="close"><button aria-label="关闭">×</button></form><h2 id="looktitle">视角设置</h2><label for="sensitivity">鼠标灵敏度 <output id="sensitivity-value" for="sensitivity">1.00×</output></label><input id="sensitivity" type="range" min="0.5" max="1.5" step="0.05" value="1"><p>按住 Q 回望，松开回到前方。回望时可以用鼠标小幅扫视，角色沿原方向移动和出招。</p></dialog><dialog id="room"><form method="dialog" class="close"><button aria-label="关闭">×</button></form><p class="eyebrow">NORTH POLE POST</p><h2>双人试玩</h2><p id="roomtext">邀请一位好友加入。两队从各自仓库出发。</p><div id="room-actions"></div><label id="outputrow" hidden><span id="outputlabel"></span><textarea id="outcode" readonly rows="2"></textarea><button id="copy">复制</button></label><label id="inputrow" hidden><span>好友回执</span><textarea id="answer" rows="2" placeholder="把对方发来的回执粘贴到这里"></textarea><button id="accept">连接好友</button></label><p id="netstatus" role="status"></p><button id="leave" hidden>退出房间，返回陪练</button></dialog>
+<script src="snow.js"></script><script src="rooms.js"></script><script src="play.js"></script></body></html>
