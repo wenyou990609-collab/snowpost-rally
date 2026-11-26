@@ -24,9 +24,9 @@
     $('room-actions').replaceChildren(b);
   };
 
-  function deadline(reason) {
+  function deadline(reason,milliseconds=16000) {
     clearTimeout(openTimer);
-    openTimer=setTimeout(()=>lost(reason),16000);
+    openTimer=setTimeout(()=>lost(reason),milliseconds);
   }
   function send(msg) {
     if (cloud && peerUid) cloud.send(msg,peerUid);
@@ -34,7 +34,7 @@
   }
   function share(kind,code) {
     const invitation=new URL(kind==='play' && isLocal ? publicGame : cleanUrl);
-    if(kind==='play') invitation.searchParams.set('v','online2');
+    if(kind==='play') invitation.searchParams.set('v','online3');
     invitation.hash=kind+'='+code;
     setOutput('发给好友，打开即可加入',invitation.href);
     const local=new URL(cleanUrl);
@@ -116,7 +116,7 @@
     report('');
     action(label,()=>begin(retryKind,retryCode));
   }
-  async function begin(kind='',code='') {
+  async function begin(kind='',code='',retries=1) {
     if (opening) return;
     opening=true;
     retryKind=kind; retryCode=code;
@@ -133,7 +133,7 @@
           if (id===session) relay(code);
         } else {
           const key=code || Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
-          await joinPublic(key,id);
+          await joinPublic(key,id,retries);
         }
       } catch (error) {
         if(id===session) lost(error.message||'连接失败，请重试。');
@@ -165,11 +165,21 @@
     socket.onclose = () => { if (id === session) lost('房间连接已关闭，可重新加入。'); };
   }
 
-  async function joinPublic(code,id) {
+  async function joinPublic(code,id,retries) {
     if (!/^[a-f0-9]{32}$/.test(code)) throw Error('房间链接不完整，请重新复制。');
-    deadline('公网房间服务暂时连不上，请重试。');
     const {connect}=await import('./itty-relay.js');
     if (id!==session) return;
+    function connectionFailed(reason) {
+      if (id!==session) return;
+      if (retries>0 && !linkRole) {
+        disconnect(false,false);
+        begin('play',code,retries-1);
+        report('连接较慢，正在自动重试…');
+      } else {
+        lost(reason);
+      }
+    }
+    openTimer=setTimeout(()=>connectionFailed('公网房间服务暂时连不上，请重试。'),35000);
     const ch=connect('snowpost-v1-'+code,{announce:true});
     cloud=ch;
     ch.on('join',event=>{
@@ -185,7 +195,7 @@
       } else {
         linkRole=2;
         report('正在加入蓝队…');
-        deadline('未收到房主响应，请确认房主仍在房间里，再重试。');
+        deadline('未收到房主响应，请确认房主仍在房间里，再重试。',30000);
         ch.send({kind:'knock'});
       }
     });
@@ -195,7 +205,7 @@
         if (peerUid && uid!==peerUid) {ch.send({kind:'full'},uid);return;}
         peerUid=uid;
         ch.send({kind:'seat'},uid);
-        if (!game.role) deadline('好友加入超时，请重新连接房间。');
+        if (!game.role) deadline('好友加入超时，请重新连接房间。',30000);
       } else if (linkRole===2 && !peerUid && msg.kind==='full') {
         lost('房间已有两位玩家，请稍后重试。');
       } else if (linkRole===2 && !peerUid && msg.kind==='seat') {
@@ -208,8 +218,8 @@
     ch.on('leave',event=>{
       if (id===session && peerUid && event.uid===peerUid) lost('好友已离开。你们可以重新打开同一房间链接。');
     });
-    ch.on('close',()=>{if(id===session) lost('公网房间连接已断开，请重试。');});
-    ch.on('error',()=>{if(id===session) lost('公网房间服务暂时不可用，请重试。');});
+    ch.on('close',()=>connectionFailed('公网房间连接已断开，请重试。'));
+    ch.on('error',()=>connectionFailed('公网房间服务暂时不可用，请重试。'));
   }
   const game = window.SnowGame = {
     soundOn:true, bits:0, remoteBits:0, remoteYaw:0, yaw:-Math.PI/2, pitch:0.16, zoom:1, rear:false, rearYaw:0, rearPitch:0, role:0, epoch:0,

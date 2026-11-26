@@ -1,6 +1,6 @@
 # 雪镇夺礼
 
-[打开浏览器试玩](https://wenyou990609-collab.github.io/snowpost-rally/?v=online2)
+[打开浏览器试玩](https://wenyou990609-collab.github.io/snowpost-rally/?v=online3)
 
 在雪地集市中央抢到礼盒，送回己方仓库得一分。莓红队的仓库在西北，冰蓝队在东南。单人打开时由电脑陪练。
 
