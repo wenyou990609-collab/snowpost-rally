@@ -1,41 +1,58 @@
 (() => {
-  const $ = (id) => document.getElementById(id);
+  const $ = id => document.getElementById(id);
   const modal = $('room');
-  let socket, peer, channel, openTimer, pausedTimer, linkRole = 0, session = 0;
-  let snapshot = '', remoteSkill = -1, localSkill = -1, onlineReady = false;
-  let wantsPair = false;
   const cleanUrl = new URL(location.href);
-  cleanUrl.hash = '';
-  cleanUrl.search = '';
-  const service = fetch('room-service', {cache:'no-store'}).then(async r => r.ok && (await r.json()).rally === 1).catch(() => false);
+  cleanUrl.hash = cleanUrl.search = '';
+  const publicGame = 'https://wenyou990609-collab.github.io/snowpost-rally/';
+  const isLocal = ['127.0.0.1','localhost','[::1]'].includes(location.hostname);
+  const isPages = location.hostname==='wenyou990609-collab.github.io';
+  const service = isPages ? Promise.resolve(false) : fetch('room-service',{cache:'no-store',signal:AbortSignal.timeout(4000)})
+    .then(async r=>r.ok && (await r.json()).rally===1).catch(()=>false);
+  let socket, cloud, peerUid='', openTimer, pausedTimer, onGameReady=null;
+  let linkRole=0, session=0, opening=false, onlineReady=false, wantsPair=false;
+  let snapshot='', remoteSkill=-1, localSkill=-1, retryKind='', retryCode='';
   const report = message => { $('netstatus').textContent = message; };
   const setOutput = (label, value) => {
     $('outputrow').hidden = false;
     $('outputlabel').textContent = label;
     $('outcode').value = value;
   };
-  const action = (name, fn) => {
-    const b = document.createElement('button');
-    b.innerText = name;
-    b.onclick = () => Promise.resolve(fn()).catch(err => {
-      disconnect(false);
-      panel();
-      report(err.message || '连接失败，请重试。');
-    });
+  const action = (label,fn) => {
+    const b=document.createElement('button');
+    b.textContent=label;
+    b.onclick=fn;
     $('room-actions').replaceChildren(b);
   };
+
+  function deadline(reason) {
+    clearTimeout(openTimer);
+    openTimer=setTimeout(()=>lost(reason),16000);
+  }
   function send(msg) {
-    const wire = channel && channel.readyState === 'open' ? channel : socket && socket.readyState === 1 ? socket : null;
-    if (wire && wire.bufferedAmount < 131072) wire.send(JSON.stringify(msg));
+    if (cloud && peerUid) cloud.send(msg,peerUid);
+    else if (socket?.readyState===WebSocket.OPEN && socket.bufferedAmount<131072) socket.send(JSON.stringify(msg));
+  }
+  function share(kind,code) {
+    const invitation=new URL(kind==='play' && isLocal ? publicGame : cleanUrl);
+    if(kind==='play') invitation.searchParams.set('v','online2');
+    invitation.hash=kind+'='+code;
+    setOutput('发给好友，打开即可加入',invitation.href);
+    const local=new URL(cleanUrl);
+    local.hash=invitation.hash;
+    local.search=invitation.search;
+    history.replaceState(null,'',local);
+    retryKind=kind; retryCode=code;
+    $('room-actions').replaceChildren();
   }
   function start() {
     if (game.role || !onlineReady || !wantsPair) return;
+    clearTimeout(openTimer);
     game.role = linkRole;
     game.epoch++;
     $('mode').textContent = '好友对战';
     $('invite').innerHTML = '对战房间 ↗';
     $('room-actions').replaceChildren();
-    $('inputrow').hidden = $('outputrow').hidden = true;
+    $('outputrow').hidden = true;
     $('roomtext').textContent = linkRole === 1 ? '你是莓红队。将礼物送回西北角红色仓库。' : '你是冰蓝队。将礼物送回东南角蓝色仓库。';
     report('好友已连接');
     modal.close();
@@ -64,44 +81,65 @@
       lost('好友已离开。你可以创建新房间。');
     }
   }
-  function disconnect(notify = true) {
-    session++;
+
+  function disconnect(notify=true,clearLink=true) {
     if (notify) send({kind:'bye'});
-    clearTimeout(openTimer);
-    clearTimeout(pausedTimer);
-    const s = socket, p = peer, c = channel;
-    socket = peer = channel = null;
-    if (s) s.close();
-    if (c) c.close();
-    if (p) p.close();
-    const wasPlaying = !!game.role;
-    game.role = linkRole = game.bits = game.remoteBits = 0;
-    game.remoteYaw=0;
-    localSkill = remoteSkill = -1;
-    snapshot = '';
-    wantsPair = false;
+    session++;
+    clearTimeout(openTimer); clearTimeout(pausedTimer);
+    onGameReady=null;
+    const oldSocket=socket, oldCloud=cloud;
+    socket=cloud=null; peerUid='';
+    if (oldSocket) oldSocket.close();
+    if (oldCloud) oldCloud.close();
+    const wasPlaying=!!game.role;
+    game.role=linkRole=game.bits=game.remoteBits=0;
+    game.remoteYaw=0; localSkill=remoteSkill=-1; snapshot='';
+    wantsPair=opening=false;
     if (wasPlaying) game.epoch++;
-    $('mode').textContent = '单人陪练';
-    $('invite').innerHTML = '邀请好友 <b>↗</b>';
-    $('leave').hidden = true;
-    if (location.hash) history.replaceState(null,'',cleanUrl);
+    $('mode').textContent='单人陪练';
+    $('invite').textContent='邀请好友 ↗';
+    $('outputrow').hidden=$('leave').hidden=true;
+    if (clearLink) {
+      retryKind=retryCode='';
+      if (location.hash) history.replaceState(null,'',cleanUrl);
+    }
   }
   function lost(text) {
-    disconnect(false);
-    panel();
+    disconnect(false,false);
+    panel(retryCode?'重新连接房间':'创建双人房间');
     report(text);
     if (!modal.open) modal.showModal();
   }
-  function panel() {
-    if (linkRole) return;
-    $('inputrow').hidden = $('outputrow').hidden = true;
-    $('roomtext').textContent = '邀请一位好友加入。两队从各自仓库出发。';
+  function panel(label='创建双人房间') {
+    $('outputrow').hidden=true;
+    $('roomtext').textContent='两个人打开同一条房间链接，即可在不同网络一起玩。';
     report('');
-    action('创建双人房间', async () => {
-      $('room-actions').replaceChildren();
-      if (await service) relay('');
-      else await directHost();
-    });
+    action(label,()=>begin(retryKind,retryCode));
+  }
+  async function begin(kind='',code='') {
+    if (opening) return;
+    opening=true;
+    retryKind=kind; retryCode=code;
+    const id=++session;
+    $('room-actions').replaceChildren();
+    $('leave').hidden=false;
+    report(onlineReady?'正在连接房间服务…':'正在载入游戏，随后自动加入房间…');
+    const connect=async ()=>{
+      try {
+        const native=kind==='room' || (!kind && !isLocal && !isPages && await service);
+        if (id!==session) return;
+        if (native) {
+          if (!await service) throw Error('这个旧邀请已失效，请从试玩首页新建房间。');
+          if (id===session) relay(code);
+        } else {
+          const key=code || Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
+          await joinPublic(key,id);
+        }
+      } catch (error) {
+        if(id===session) lost(error.message||'连接失败，请重试。');
+      }
+    };
+    if (onlineReady) connect(); else onGameReady=connect;
   }
   function relay(code) {
     linkRole = code ? 2 : 1;
@@ -112,92 +150,73 @@
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     if (code) url.searchParams.set('room',code);
     socket = new WebSocket(url);
+    deadline('未能连接房间服务，请重试。');
     socket.onmessage = event => {
       if (id !== session) return;
       let m; try { m = JSON.parse(event.data); } catch { return; }
       if (m.kind === 'invite') {
-        const url = new URL(cleanUrl);
-        url.hash = 'room=' + m.code;
-        setOutput('邀请链接',url.href);
-        report('等待好友进入。');
+        clearTimeout(openTimer);
+        share('room',m.code);
+        report('房间已就绪，分享链接即可开局。');
         $('room-actions').replaceChildren();
       } else if (m.kind === 'error') lost(m.text);
       else message(m);
     };
     socket.onclose = () => { if (id === session) lost('房间连接已关闭，可重新加入。'); };
   }
-  function setupPeer(role) {
-    if (!window.RTCPeerConnection) throw Error('此浏览器不支持网页直连，请使用新版 Edge、Chrome 或 Safari。');
-    const id = session;
-    linkRole = role;
-    $('leave').hidden = false;
-    peer = new RTCPeerConnection({iceServers:[{urls:['stun:stun.cloudflare.com:3478','stun:stun.l.google.com:19302']}]});
-    peer.onconnectionstatechange = () => {
-      if (id !== session || !peer) return;
-      if (peer.connectionState === 'failed') lost('两端网络未能直连。可更换网络，或使用带房间服务的试玩地址。');
-    };
-    function use(ch) {
-      channel = ch;
-      ch.onopen = () => {
-        if (id !== session) return;
-        clearTimeout(openTimer);
-        if (onlineReady) send({kind:'ready'});
-      };
-      ch.onmessage = e => {
-        if (id !== session || typeof e.data !== 'string' || e.data.length>12000) return;
-        try { message(JSON.parse(e.data)); } catch { /* Ignore malformed packets. */ }
-      };
-      ch.onclose = () => { if (id === session) lost('好友连接已结束。'); };
-    }
-    if (role === 1) use(peer.createDataChannel('snowpost'));
-    else peer.ondatachannel = e => use(e.channel);
-  }
-  async function description() {
-    const p = peer;
-    await p.setLocalDescription();
-    if (p.iceGatheringState !== 'complete') {
-      await new Promise(resolve => {
-        const end = () => { clearTimeout(timer); p.removeEventListener('icegatheringstatechange',check); resolve(); };
-        const check = () => { if (p.iceGatheringState==='complete') end(); };
-        const timer = setTimeout(end,4500);
-        p.addEventListener('icegatheringstatechange',check);
-        check();
-      });
-    }
-    if (p !== peer) throw Error('邀请已取消。');
-    return btoa(p.localDescription.sdp).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-  }
-  function sdp(code) {
-    if (!/^[\w-]{20,22000}$/.test(code)) throw Error('邀请码格式有误，请完整复制。');
-    return atob(code.replace(/-/g,'+').replace(/_/g,'/'));
-  }
-  async function directHost() {
-    setupPeer(1);
-    report('正在生成邀请链接…');
-    const code = await description();
-    const url = new URL(cleanUrl);
-    url.hash = 'invite='+code;
-    setOutput('① 将邀请链接发给好友',url.href);
-    $('inputrow').hidden = false;
-    $('roomtext').textContent = '好友打开链接后会得到一段回执。将回执贴到这里，双方即可开局。';
-    report('等待好友回执。请保持此页打开。');
-  }
-  function timeout() {
-    clearTimeout(openTimer);
-    openTimer = setTimeout(() => lost('连接超时。请重新邀请，或使用带房间服务的试玩地址。'),30000);
-  }
-  async function directGuest(code) {
-    setupPeer(2);
-    report('正在生成回执…');
-    await peer.setRemoteDescription({type:'offer',sdp:sdp(code)});
-    setOutput('复制回执，发给邀请你的好友',await description());
-    report('等待房主粘贴回执。');
+
+  async function joinPublic(code,id) {
+    if (!/^[a-f0-9]{32}$/.test(code)) throw Error('房间链接不完整，请重新复制。');
+    deadline('公网房间服务暂时连不上，请重试。');
+    const {connect}=await import('./itty-relay.js');
+    if (id!==session) return;
+    const ch=connect('snowpost-v1-'+code,{announce:true});
+    cloud=ch;
+    ch.on('join',event=>{
+      if (id!==session || !event.self) return;
+      clearTimeout(openTimer);
+      if (event.total>2) {
+        lost('房间已有两位玩家，请稍后重试。');
+      } else if (event.total===1) {
+        linkRole=1;
+        share('play',code);
+        $('roomtext').textContent='你是莓红队。把下面的链接发给好友，并保持此页打开。';
+        report('等待第二位玩家…');
+      } else {
+        linkRole=2;
+        report('正在加入蓝队…');
+        deadline('未收到房主响应，请确认房主仍在房间里，再重试。');
+        ch.send({kind:'knock'});
+      }
+    });
+    ch.on('message',({uid,message:msg})=>{
+      if (id!==session || !uid || !msg || typeof msg!=='object') return;
+      if (linkRole===1 && msg.kind==='knock') {
+        if (peerUid && uid!==peerUid) {ch.send({kind:'full'},uid);return;}
+        peerUid=uid;
+        ch.send({kind:'seat'},uid);
+        if (!game.role) deadline('好友加入超时，请重新连接房间。');
+      } else if (linkRole===2 && !peerUid && msg.kind==='full') {
+        lost('房间已有两位玩家，请稍后重试。');
+      } else if (linkRole===2 && !peerUid && msg.kind==='seat') {
+        peerUid=uid;
+        send({kind:'ready'});
+      } else if (uid===peerUid) {
+        message(msg);
+      }
+    });
+    ch.on('leave',event=>{
+      if (id===session && peerUid && event.uid===peerUid) lost('好友已离开。你们可以重新打开同一房间链接。');
+    });
+    ch.on('close',()=>{if(id===session) lost('公网房间连接已断开，请重试。');});
+    ch.on('error',()=>{if(id===session) lost('公网房间服务暂时不可用，请重试。');});
   }
   const game = window.SnowGame = {
     soundOn:true, bits:0, remoteBits:0, remoteYaw:0, yaw:-Math.PI/2, pitch:0.16, zoom:1, rear:false, rearYaw:0, rearPitch:0, role:0, epoch:0,
     ready() {
       onlineReady = true;
       $('loader').hidden = true;
+      if (onGameReady) {const resume=onGameReady; onGameReady=null; resume();}
       if (linkRole) { send({kind:'ready'}); start(); }
     },
     queueSkill(k) { if (onlineReady && !modal.open) localSkill=k; },
@@ -208,32 +227,26 @@
     sendSnapshot(s) { send({kind:'state',s}); },
     hud(s) { window.paintHud?.(JSON.parse(s)); }
   };
-  $('invite').onclick = () => { if (!linkRole) panel(); modal.showModal(); };
-  $('leave').onclick = () => { disconnect(); panel(); modal.close(); };
-  $('copy').onclick = async () => {
-    try { await navigator.clipboard.writeText($('outcode').value); report('已复制，可以发给好友。'); }
-    catch { $('outcode').focus(); $('outcode').select(); report('已选中，可手动复制。'); }
+
+  $('invite').onclick=()=>{if(!opening) panel(retryCode?'重新连接房间':'创建双人房间'); modal.showModal();};
+  $('leave').onclick=()=>{disconnect(); panel(); modal.close();};
+  $('copy').onclick=async ()=>{
+    try {await navigator.clipboard.writeText($('outcode').value); report('房间链接已复制，发给好友即可。');}
+    catch {$('outcode').focus(); $('outcode').select(); report('已选中链接，可以手动复制。');}
   };
-  $('accept').onclick = async () => {
-    try { await peer.setRemoteDescription({type:'answer',sdp:sdp($('answer').value.trim())}); report('正在连接好友…'); timeout(); }
-    catch { report('回执无效或已过期，请检查内容。'); }
-  };
-  modal.addEventListener('close',() => { game.bits=0; });
-  document.addEventListener('visibilitychange',() => {
+  modal.addEventListener('close',()=>{game.bits=0;});
+  document.addEventListener('visibilitychange',()=>{
     clearTimeout(pausedTimer);
-    if (document.hidden && game.role) pausedTimer=setTimeout(()=>{ if(document.hidden && game.role) lost('游戏页已长时间处于后台，请重新加入。'); },30000);
+    if(document.hidden && game.role) pausedTimer=setTimeout(()=>{if(document.hidden && game.role) lost('网页已长时间处于后台，请重新连接房间。');},30000);
   });
-  const hash = new URLSearchParams(location.hash.slice(1));
-  if (hash.has('room') || hash.has('invite')) {
+  const hash=new URLSearchParams(location.hash.slice(1));
+  if(hash.has('play') || hash.has('room')) {
+    const kind=hash.has('play')?'play':'room';
+    const code=hash.get(kind);
     modal.showModal();
-    const code = hash.get('room') || hash.get('invite');
-    action('加入好友对战',async () => {
-      $('room-actions').replaceChildren();
-      if (hash.has('room')) {
-        if (!await service) throw Error('该地址未启用房间服务。请让好友重新创建邀请。');
-        relay(code);
-      } else await directGuest(code);
-    });
-    $('roomtext').textContent = '好友邀请你到雪镇争夺礼物。你将从蓝色仓库出发。';
+    if ((kind==='play'?/^[a-f0-9]{32}$/:/^[a-f0-9]{24}$/).test(code)) begin(kind,code);
+    else {panel();report('邀请链接不完整，可新建房间或请好友重新发送。');}
+  } else if(hash.has('invite')) {
+    modal.showModal(); panel(); report('这是旧版邀请。请新建在线房间，分享新的链接。');
   }
 })();
